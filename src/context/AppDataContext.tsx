@@ -80,6 +80,24 @@ interface WorkspaceData {
   plan: "free" | "pro";
 }
 
+interface WorkspacePerson {
+  userId?: string;
+  uid?: string;
+  email?: string;
+  displayName?: string;
+  photoURL?: string;
+  avatar?: string;
+  avatarColor?: string;
+  type?: "guest" | "external_guest" | string;
+  role?: string;
+  status?: "active" | "removed" | string;
+  projects?: Record<string, any>;
+  projectIds?: string[];
+  lastActive?: any;
+  [key: string]: unknown;
+}
+
+
 interface Note {
   id: string;
   content: string;
@@ -95,11 +113,13 @@ interface AppDataContextType {
   loading: boolean;
   files: any[];
   members: WorkspaceMember[];
+  workspacePeople: WorkspacePerson[];
   pendingInvites: PendingInvite[];
   memberCount: number;
   workspaceData: WorkspaceData | null;
   cancelInvite: (inviteCode: string) => Promise<void>;
 }
+
 
 const AppDataContext = createContext<AppDataContextType>({
   tasks: [],
@@ -109,11 +129,13 @@ const AppDataContext = createContext<AppDataContextType>({
   loading: true,
   files: [],
   members: [],
+  workspacePeople: [],
   pendingInvites: [],
   memberCount: 0,
   workspaceData: null,
   cancelInvite: async () => {},
 });
+
 
 // ── Fix legacy invites that were saved with random Firestore auto-IDs ────────
 // This runs once on workspace load and re-saves any broken invites
@@ -177,6 +199,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [projects, setProjects]             = useState<Project[]>([]);
   const [loading, setLoading]               = useState(true);
   const [members, setMembers]               = useState<WorkspaceMember[]>([]);
+  const [workspacePeople, setWorkspacePeople] = useState<WorkspacePerson[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [workspaceData, setWorkspaceData]   = useState<WorkspaceData | null>(null);
   const resolvedRef                         = useRef(false);
@@ -348,12 +371,14 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
   // ── Workspace team listeners (depends on workspaceId) ────────────────────
   useEffect(() => {
-    if (!workspaceId) {
+      if (!workspaceId) {
       setMembers([]);
+      setWorkspacePeople([]);
       setPendingInvites([]);
       setWorkspaceData(null);
       return;
     }
+
 
     console.log("[AppData] 🔄 Attaching workspace listeners for:", workspaceId);
 
@@ -437,12 +462,27 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       (err) => console.warn("[AppData] invites error:", err.code)
     );
 
+        // Listen to workspace people (external guests / project collaborators)
+    const unsubPeople = onSnapshot(
+      collection(db, "workspaces", workspaceId, "people"),
+      (snap) => {
+        const data = snap.docs.map(
+          (d) => ({ userId: d.id, ...d.data() } as WorkspacePerson)
+        );
+        setWorkspacePeople(data);
+        console.log("[AppData] workspace people:", data.length);
+      },
+      (err) => console.warn("[AppData] people error:", err.code)
+    );
+
     return () => {
       unsubWorkspace();
       unsubWsMembers();
       unsubInvites();
+      unsubPeople();
     };
   }, [workspaceId]);
+
 
   return (
     <AppDataContext.Provider
@@ -453,11 +493,13 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         projects,
         loading,
         files: [],
-        members,
+              members,
+        workspacePeople,
         pendingInvites,
         memberCount: members.filter((m) => m.status === "active").length,
         workspaceData,
         cancelInvite,
+
       }}
     >
       {children}

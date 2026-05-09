@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
-  doc, getDoc, updateDoc, setDoc, serverTimestamp, writeBatch,
+  doc, getDoc, serverTimestamp, writeBatch,
 } from "firebase/firestore";
 import { db } from "../lib/firebase/config";
 import { useAuth } from "../context/AuthContext";
@@ -37,6 +37,14 @@ export default function JoinWorkspacePage() {
 
         const data = { id: snap.id, ...snap.data() } as any;
 
+        // ✅ TYPE-GUARD — if this is a project invite, redirect to the
+        // project-join page so we don't write the guest into
+        // workspaces/{wsId}/members by mistake.
+        if (data.type && data.type !== "workspace") {
+          navigate(`/join-project/${inviteCode}`, { replace: true });
+          return;
+        }
+
         // Check expiry
         if (data.expiresAt) {
           const expMs =
@@ -57,7 +65,7 @@ export default function JoinWorkspacePage() {
     }
 
     load();
-  }, [inviteCode, authLoading]);
+  }, [inviteCode, authLoading, navigate]);
 
   // ── 2. Accept invite ───────────────────────────────────────────────────────
   async function acceptInvite() {
@@ -93,7 +101,6 @@ export default function JoinWorkspacePage() {
       });
 
       // ✅ STEP 2 — Mark GLOBAL invite as accepted
-      // Path: invites/{inviteCode}
       const globalRef = doc(db, "invites", inviteCode!);
       batch.update(globalRef, {
         status:     "accepted",
@@ -101,9 +108,6 @@ export default function JoinWorkspacePage() {
       });
 
       // ✅ STEP 3 — Mark WORKSPACE SUBCOLLECTION invite as accepted
-      // Path: workspaces/{workspaceId}/invites/{inviteCode}
-      // This is what AppDataContext onSnapshot watches →
-      // sender's Pending Invites list updates in real time instantly
       const wsInviteRef = doc(
         db, "workspaces", workspaceId, "invites", inviteCode!
       );
@@ -113,7 +117,6 @@ export default function JoinWorkspacePage() {
       });
 
       // ✅ STEP 4 — Update user doc with the SENDER's workspaceId
-      // This is critical — must use WF-354 (sender's) NOT a new workspace
       const userRef = doc(db, "users", uid);
       batch.set(userRef, {
         uid,
@@ -121,7 +124,7 @@ export default function JoinWorkspacePage() {
         displayName: user.displayName ?? user.email?.split("@")[0] ?? "Member",
         photoURL:    user.photoURL ?? "",
         plan:        "free",
-        workspaceId, // ← WF-354 (sender's workspace), not a new one
+        workspaceId, // ← sender's workspace, not a new one
         updatedAt:   serverTimestamp(),
       }, { merge: true });
 
@@ -130,7 +133,6 @@ export default function JoinWorkspacePage() {
       console.log("[JoinPage] ✅ batch.commit() succeeded");
 
       // ✅ STEP 5 — Update AuthContext workspaceId in memory immediately
-      // So the dashboard loads WF-354 instantly without a page refresh
       setWorkspaceId(workspaceId);
 
       // ✅ STEP 6 — Clear the pending invite code from localStorage
